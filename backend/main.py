@@ -39,10 +39,12 @@ try:
 except:
     pyautogui = None
 
-CONFIG_FILE = "config.json"
-AGENDA_DB = "mega_agenda.db"
+CONFIG_FILE = "storage/config.json"
+AGENDA_DB = "storage/mega_agenda.db"
+HISTORY_FILE = "storage/mega_history.json"
 
 def init_db():
+    if not os.path.exists("storage"): os.makedirs("storage")
     conn = sqlite3.connect(AGENDA_DB)
     cursor = conn.cursor()
     cursor.execute("""
@@ -132,31 +134,37 @@ def get_transcription(file_path, prompt="Mega"):
     if not api_key: return ""
 
     try:
-        # 1. Tenta adivinhar o motor de áudio pela chave (mais robusto)
-        is_groq = api_key.startswith("gsk_")
-        is_gemini = api_key.startswith("AIza")
-        is_together = api_key.startswith("top_")
+        # 1. Detecta o motor real pela assinatura da chave
+        motor_real = m_type
+        if api_key.startswith("gsk_"): motor_real = "groq"
+        elif api_key.startswith("AIza"): motor_real = "gemini"
+        elif api_key.startswith("top_"): motor_real = "together"
+        elif api_key.startswith("sk-or"): motor_real = "openrouter"
 
-        # Prioridade 1: Groq (Whisper V3 Turbo - Mais rápido)
-        if is_groq or (m_type == "groq" and not is_gemini and not is_together):
+        print(f"[VOZ] Transcrevendo via: {motor_real.upper()}")
+
+        # Groq (Whisper V3 Turbo)
+        if motor_real == "groq":
             url = "https://api.groq.com/openai/v1/audio/transcriptions"
             headers = {"Authorization": f"Bearer {api_key}"}
             with open(file_path, "rb") as f:
                 resp = requests.post(url, headers=headers, files={"file": f}, 
                                      data={"model": "whisper-large-v3-turbo", "language": "pt", "prompt": prompt}, timeout=10)
                 if resp.status_code == 200: return resp.json().get("text", "").strip()
+                else: print(f"[GROQ ERR] {resp.text}")
         
-        # Prioridade 2: Together AI
-        elif is_together or (m_type == "together" and not is_gemini):
+        # Together AI
+        elif motor_real == "together":
             url = "https://api.together.xyz/v1/audio/transcriptions"
             headers = {"Authorization": f"Bearer {api_key}"}
             with open(file_path, "rb") as f:
                 resp = requests.post(url, headers=headers, files={"file": f}, 
                                      data={"model": "whisper-1", "language": "pt", "prompt": prompt}, timeout=10)
                 if resp.status_code == 200: return resp.json().get("text", "").strip()
+                else: print(f"[TOGETHER ERR] {resp.text}")
 
-        # Prioridade 3: Gemini (Multimodal)
-        elif is_gemini or m_type == "gemini":
+        # Gemini (Multimodal)
+        elif motor_real == "gemini":
             import google.generativeai as genai
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel("gemini-2.0-flash")
@@ -322,6 +330,8 @@ class MegaAgent:
         self.config = config
         m_type = str(config.get("modelType", "groq")).lower().strip()
         api_key = str(config.get("apiKey", "")).strip()
+        self.llm = None
+        self.history = []
         
         print(f"[SISTEMA] Inicializando Kernel Cognitivo: {m_type.upper()}")
         
@@ -331,46 +341,49 @@ class MegaAgent:
                 self.llm = ChatGoogleGenerativeAI(google_api_key=api_key, model="gemini-1.5-flash", temperature=0.2)
             elif m_type == "openrouter":
                 from langchain_openai import ChatOpenAI
-                self.llm = ChatOpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1", model="meta-llama/llama-3.3-70b-instruct", temperature=0.2)
+                self.llm = ChatOpenAI(
+                    api_key=api_key,
+                    base_url="https://openrouter.ai/api/v1",
+                    model="meta-llama/llama-3.3-70b-instruct",
+                    temperature=0.2
+                )
             elif m_type == "together":
                 from langchain_openai import ChatOpenAI
-                self.llm = ChatOpenAI(api_key=api_key, base_url="https://api.together.xyz/v1", model="meta-llama/Llama-3.3-70B-Instruct-Turbo", temperature=0.2)
-            else:
+                self.llm = ChatOpenAI(
+                    api_key=api_key,
+                    base_url="https://api.together.xyz/v1",
+                    model="meta-llama/Llama-3.3-70B-Instruct-Turbo",
+                    temperature=0.2
+                )
+            elif m_type == "groq":
                 from langchain_groq import ChatGroq
                 self.llm = ChatGroq(api_key=api_key, model="llama-3.3-70b-versatile", temperature=0.2)
+            else:
+                raise ValueError(f"Modelo '{m_type}' nao reconhecido. Use: groq, gemini, openrouter, together.")
+            print(f"[SISTEMA] Kernel {m_type.upper()} instanciado com sucesso.")
         except Exception as e:
             import traceback
-            error_trace = traceback.format_exc()
-            print(f"[CRITICAL ERR] Falha ao carregar Kernel {m_type}: {error_trace}")
+            print(f"[CRITICAL ERR] Falha ao carregar Kernel {m_type}: {traceback.format_exc()}")
             self.llm = None
-            raise Exception(f"Erro no Kernel {m_type}: {str(e)}")
-            
-        self.history = []
-        try:
-            if os.path.exists("mega_history.json"):
-                with open("mega_history.json", "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-                for msg in data:
-                    if msg["type"] == "human": self.history.append(HumanMessage(content=msg["content"]))
-                    elif msg["type"] == "ai": self.history.append(AIMessage(content=msg["content"]))
-                    elif msg["type"] == "system": self.history.append(SystemMessage(content=msg["content"]))
-        except Exception as e: print("[HISTORY LOAD ERROR]", e)
+            raise  # Re-propaga o erro para save_config capturar o erro real
 
     async def verify_kernel(self):
-        """Testa se o kernel consegue responder um 'ping' básico."""
-        if not self.llm: return False
+        """Testa se o kernel consegue responder um ping basico."""
+        if not self.llm:
+            raise Exception("LLM nao foi inicializado. Verifique o modelo e a chave API.")
+        import asyncio
         try:
-            # Tenta um invoke rápido com timeout de 10s
-            import asyncio
-            await asyncio.wait_for(asyncio.to_thread(self.llm.invoke, "Responda apenas OK"), timeout=10.0)
+            await asyncio.wait_for(
+                asyncio.to_thread(self.llm.invoke, "Responda apenas: OK"),
+                timeout=15.0
+            )
+            print("[VERIFY] Kernel respondeu com sucesso!")
             return True
         except asyncio.TimeoutError:
-            print("[VERIFY ERR] Timeout na resposta da IA.")
-            raise Exception("A IA demorou muito para responder. Verifique sua internet ou a chave.")
+            raise Exception("A IA demorou mais de 15s para responder. Verifique sua internet.")
         except Exception as e:
-            print(f"[VERIFY ERR] {e}")
-            return False
+            # Propaga o erro original da API (ex: Invalid API Key, 401, etc)
+            raise Exception(f"Falha na verificacao do Kernel: {str(e)}")
 
     def save_history(self):
         try:
@@ -380,9 +393,21 @@ class MegaAgent:
                 if isinstance(msg, HumanMessage): data.append({"type": "human", "content": str(msg.content)})
                 elif isinstance(msg, AIMessage): data.append({"type": "ai", "content": str(msg.content)})
                 elif isinstance(msg, SystemMessage): data.append({"type": "system", "content": str(msg.content)})
-            with open("mega_history.json", "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False)
+            with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as e: print("[HISTORY SAVE ERROR]", e)
+
+    def load_history(self):
+        try:
+            if os.path.exists(HISTORY_FILE):
+                with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+                for msg in data:
+                    if msg["type"] == "human": self.history.append(HumanMessage(content=msg["content"]))
+                    elif msg["type"] == "ai": self.history.append(AIMessage(content=msg["content"]))
+                    elif msg["type"] == "system": self.history.append(SystemMessage(content=msg["content"]))
+        except Exception as e: print("[HISTORY LOAD ERROR]", e)
     
     def get_memoria_links(self):
         try:
@@ -571,27 +596,26 @@ async def save_config(config: ConfigModel):
     global mega_agent_instance
     print(f"[CONFIG] ATUALIZANDO CORE: {config.modelType.upper()}")
     try:
-        # 1. Atualiza Configuração
+        # 1. Atualiza Configuracao em memoria
         current_config.update(config.dict())
         
-        # 2. Tenta Instanciar o Kernel
+        # 2. Instancia o Kernel (raises se falhar)
         new_agent = MegaAgent(current_config)
         
-        # 3. Teste de Fogo (Verifica se a chave funciona)
+        # 3. Teste de Fogo — se falhar, raises Exception com motivo real
         print(f"[CONFIG] TESTANDO CHAVE {config.modelType.upper()}...")
-        verified = await new_agent.verify_kernel()
-        if not verified:
-            raise Exception(f"A chave API para {config.modelType} parece inválida ou o serviço está offline.")
+        await new_agent.verify_kernel()
             
-        # 4. Se passou, assume o novo agente
+        # 4. Passou — assume como agente principal e carrega historico
+        new_agent.load_history()
         mega_agent_instance = new_agent
         with open(CONFIG_FILE, "w") as f: json.dump(current_config, f)
         
-        # Bip de sucesso na troca
         try: winsound.Beep(1000, 100); winsound.Beep(1500, 100)
         except: pass
         
         msg = f"Kernel {config.modelType} validado e ativo."
+        print(f"[CONFIG] SUCESSO: {msg}")
         audio = await gerar_audio_base64(msg)
         return {"status": "success", "response": msg, "audio": audio, "model": config.modelType}
         
@@ -599,6 +623,9 @@ async def save_config(config: ConfigModel):
         import traceback
         err_msg = str(e)
         print(f"[CONFIG ERR] {traceback.format_exc()}")
+        # Reverte config para o estado anterior se o agente ja existia
+        if mega_agent_instance:
+            current_config.update(mega_agent_instance.config)
         return {"status": "error", "message": err_msg}
 
 @app.get("/api/config")
@@ -771,8 +798,16 @@ def load_config_from_disk():
     global mega_agent_instance
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r") as f:
-            d = json.load(f); current_config.update(d)
-            if d.get("apiKey"): mega_agent_instance = MegaAgent(current_config)
+            d = json.load(f)
+        current_config.update(d)
+        if d.get("apiKey"):
+            try:
+                mega_agent_instance = MegaAgent(current_config)
+                mega_agent_instance.load_history()
+                print(f"[STARTUP] Kernel {d.get('modelType','?').upper()} carregado do disco.")
+            except Exception as e:
+                print(f"[STARTUP WARN] Falha ao carregar kernel do disco: {e}")
+                mega_agent_instance = None
 
 @app.on_event("startup")
 def startup_event():
