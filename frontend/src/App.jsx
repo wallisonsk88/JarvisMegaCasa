@@ -17,7 +17,8 @@ function App() {
   const [voiceVolume, setVoiceVolume] = useState(1.0);
   const [isCalibrating, setIsCalibrating] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const [baseColor, setBaseColor] = useState('#ff7700'); // Novo: Cor do Tema
+  const [baseColor, setBaseColor] = useState('#ff7700');
+  const [kernelActive, setKernelActive] = useState(false);
   
   // Audio State
   const [audioLevel, setAudioLevel] = useState(0);
@@ -85,6 +86,7 @@ function App() {
           setSystemEmail(data.systemEmail || '');
           setSystemPassword(data.systemPassword || '');
           setSensitivity(data.sensitivity || 0.002);
+          setKernelActive(data.validated || false);
           setMessage(`KERNEL_${(data.modelType || 'groq').toUpperCase()}_SYNCED`);
           setTimeout(() => setMessage(''), 3000);
         }
@@ -175,8 +177,10 @@ function App() {
       });
       const data = await resp.json();
       if (data.status === 'success') {
+        setKernelActive(true);
         if (!newSens) setMessage(`SUCESSO: ${data.model.toUpperCase()} ATIVO`);
       } else {
+        setKernelActive(false);
         setMessage(`ERRO: ${data.message}`);
       }
     } catch (err) { setMessage('FALHA_CONEXAO'); }
@@ -297,12 +301,10 @@ function App() {
                 ))}
               </div>
           </div>
-
-          {/* O Chat de texto foi removido a pedido do usuário, deixando apenas a interface holográfica do Reator */}
         </div>
       </div>
 
-      {/* 4. Bottom Command (Fast & Clean) - Invisível a menos que clicado para casos de emergência */}
+      {/* 4. Bottom Command (Fast & Clean) */}
       <div className="absolute bottom-10 w-full flex items-center justify-center z-30">
         {showInput ? (
           <form onSubmit={handleSendMessage} className="flex bg-black/95 border-2 p-1 rounded-sm w-[450px] max-w-[90%] shadow-2xl animate-in fade-in zoom-in-95 pointer-events-auto" style={{ borderColor: `${activeColor}44` }}>
@@ -319,46 +321,43 @@ function App() {
         )}
       </div>
 
-      {/* 5. Settings: Full Restoration (7 Essential Controls) */}
+      {/* 5. Settings: Full Restoration */}
       {activeTab === 'settings' && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 backdrop-blur-3xl animate-in zoom-in-95 duration-200 p-8">
           <div className="bg-black/95 border-4 w-full max-w-md h-[90vh] p-8 relative flex flex-col" style={{ borderColor: activeColor }}>
             <button onClick={() => setActiveTab('chat')} className="absolute top-4 right-4 text-2xl font-light hover:rotate-90 transition-transform">X</button>
             <h2 className="text-xl font-black mb-1 tracking-[0.4em] uppercase text-center mt-2">Core_Settings</h2>
-            <div className="text-center mb-6">
+            <div className="text-center mb-6 flex items-center justify-center gap-2">
                <span className="px-2 py-1 bg-white/10 text-[8px] font-black tracking-widest text-white border border-white/20">
                   KERNEL_STATUS: <span style={{ color: activeColor }}>{modelType.toUpperCase()}</span>
                </span>
+               <div className={`w-2 h-2 rounded-full ${kernelActive ? 'bg-green-500 shadow-[0_0_10px_#22c55e]' : 'bg-red-500 shadow-[0_0_10px_#ef4444]'}`}></div>
             </div>
             
             <div className="flex-1 overflow-y-auto no-scrollbar space-y-6 text-[11px] font-black uppercase tracking-[0.2em] pr-2">
                
-               {/* 1. Calibração */}
                <button onClick={handleCalibrate} disabled={isCalibrating} className="w-full py-4 border-2 transition-all hover:bg-white hover:text-black" style={{ borderColor: activeColor }}>
                   {isCalibrating ? 'RECONHECENDO FREQUÊNCIAS...' : 'CALIBRAR MICROFONE'}
                </button>
                
-               {/* 2. Seleção de Motor */}
                <div className="space-y-2">
                  <div className="flex justify-between items-center">
                    <label className="text-[9px] opacity-40">Motor de IA (Model Kernel)</label>
                    <a href={getApiKeyUrl(modelType)} target="_blank" rel="noreferrer" className="text-[8px] text-blue-400 hover:text-white underline">PEGAR CHAVE API GRÁTIS</a>
                  </div>
                  <select value={modelType} onChange={e => setModelType(e.target.value)} className="w-full bg-black border-2 border-white/10 p-3 outline-none focus:border-white transition-colors">
-                   <option value="groq">GROQ - Llama 3.3 70B (Ultra Rápido)</option>
-                   <option value="gemini">GOOGLE - Gemini 2.5 Flash</option>
+                   <option value="groq">GROQ - Llama 3.3 70B</option>
+                   <option value="gemini">GOOGLE - Gemini 1.5 Flash</option>
                    <option value="openrouter">OPENROUTER - Llama 3.3</option>
                    <option value="together">TOGETHER AI - Llama 3.3 Turbo</option>
                  </select>
                </div>
 
-               {/* 3. API Key */}
                <div className="space-y-2">
                  <label className="text-[9px] opacity-40">Access Key (Token)</label>
                  <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} className="w-full bg-black border-2 border-white/10 p-3 outline-none" placeholder="**********" />
                </div>
 
-               {/* 4. Credentials */}
                <div className="grid grid-cols-2 gap-4">
                  <div className="space-y-2">
                    <label className="text-[9px] opacity-40">System Email</label>
@@ -370,7 +369,6 @@ function App() {
                  </div>
                </div>
 
-               {/* 5. Audio & Sensibility Sliders */}
                <div className="space-y-6 border-t border-white/5 pt-4">
                  <div className="space-y-3">
                    <div className="flex justify-between items-center text-[9px]">

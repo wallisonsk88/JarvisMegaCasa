@@ -320,15 +320,15 @@ def skill_python_exec(codigo):
 class MegaAgent:
     def __init__(self, config):
         self.config = config
-        m_type = config.get("modelType", "groq")
-        api_key = config.get("apiKey", "")
+        m_type = str(config.get("modelType", "groq")).lower().strip()
+        api_key = str(config.get("apiKey", "")).strip()
         
         print(f"[SISTEMA] Inicializando Kernel Cognitivo: {m_type.upper()}")
         
         try:
             if m_type == "gemini":
                 from langchain_google_genai import ChatGoogleGenerativeAI
-                self.llm = ChatGoogleGenerativeAI(google_api_key=api_key, model="gemini-2.0-flash", temperature=0.2)
+                self.llm = ChatGoogleGenerativeAI(google_api_key=api_key, model="gemini-1.5-flash", temperature=0.2)
             elif m_type == "openrouter":
                 from langchain_openai import ChatOpenAI
                 self.llm = ChatOpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1", model="meta-llama/llama-3.3-70b-instruct", temperature=0.2)
@@ -339,10 +339,11 @@ class MegaAgent:
                 from langchain_groq import ChatGroq
                 self.llm = ChatGroq(api_key=api_key, model="llama-3.3-70b-versatile", temperature=0.2)
         except Exception as e:
-            print(f"[CRITICAL ERR] Falha ao carregar Kernel {m_type}: {e}")
-            # Se falhar o Gemini/Together por falta de chave, o sistema não deve mentir dizendo que é outro
+            import traceback
+            error_trace = traceback.format_exc()
+            print(f"[CRITICAL ERR] Falha ao carregar Kernel {m_type}: {error_trace}")
             self.llm = None
-            raise e
+            raise Exception(f"Erro no Kernel {m_type}: {str(e)}")
             
         self.history = []
         try:
@@ -355,6 +356,16 @@ class MegaAgent:
                     elif msg["type"] == "ai": self.history.append(AIMessage(content=msg["content"]))
                     elif msg["type"] == "system": self.history.append(SystemMessage(content=msg["content"]))
         except Exception as e: print("[HISTORY LOAD ERROR]", e)
+
+    def verify_kernel(self):
+        """Testa se o kernel consegue responder um 'ping' básico."""
+        if not self.llm: return False
+        try:
+            self.llm.invoke("Responda apenas 'OK'")
+            return True
+        except Exception as e:
+            print(f"[VERIFY ERR] {e}")
+            return False
 
     def save_history(self):
         try:
@@ -555,21 +566,38 @@ async def save_config(config: ConfigModel):
     global mega_agent_instance
     print(f"[CONFIG] ATUALIZANDO CORE: {config.modelType.upper()}")
     try:
+        # 1. Atualiza Configuração
         current_config.update(config.dict())
-        mega_agent_instance = MegaAgent(current_config)
+        
+        # 2. Tenta Instanciar o Kernel
+        new_agent = MegaAgent(current_config)
+        
+        # 3. Teste de Fogo (Verifica se a chave funciona)
+        print(f"[CONFIG] TESTANDO CHAVE {config.modelType.upper()}...")
+        if not new_agent.verify_kernel():
+            raise Exception(f"A chave API para {config.modelType} parece inválida ou o serviço está offline.")
+            
+        # 4. Se passou, assume o novo agente
+        mega_agent_instance = new_agent
         with open(CONFIG_FILE, "w") as f: json.dump(current_config, f)
+        
         # Bip de sucesso na troca
         try: winsound.Beep(1000, 100); winsound.Beep(1500, 100)
         except: pass
-        msg = f"Kernel {config.modelType} sincronizado."
+        
+        msg = f"Kernel {config.modelType} validado e ativo."
         audio = await gerar_audio_base64(msg)
-        return {"status": "success", "response": msg, "audio": audio}
+        return {"status": "success", "response": msg, "audio": audio, "model": config.modelType}
+        
     except Exception as e:
-        print(f"[CONFIG ERR] {e}")
-        return {"status": "error", "message": str(e)}
+        import traceback
+        err_msg = str(e)
+        print(f"[CONFIG ERR] {traceback.format_exc()}")
+        return {"status": "error", "message": err_msg}
 
 @app.get("/api/config")
-def get_config(): return current_config
+def get_config(): 
+    return {**current_config, "validated": mega_agent_instance is not None and mega_agent_instance.llm is not None}
 
 @app.get("/api/calibrate")
 async def calibrate():
