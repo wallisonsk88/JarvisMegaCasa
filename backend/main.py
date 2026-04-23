@@ -156,7 +156,7 @@ def get_transcription(file_path, prompt="Mega"):
             try:
                 import google.generativeai as genai
                 genai.configure(api_key=api_key)
-                model = genai.GenerativeModel("gemini-1.5-flash")
+                model = genai.GenerativeModel("gemini-2.0-flash")
                 with open(file_path, "rb") as f:
                     audio_data = f.read()
                 response = model.generate_content([
@@ -164,7 +164,9 @@ def get_transcription(file_path, prompt="Mega"):
                     f"Transcreva este áudio em português. Retorne APENAS o texto transcrito. Contexto: {prompt}"
                 ])
                 return response.text.strip()
-            except: pass
+            except Exception as e:
+                print(f"[GEMINI TRANSCRIPT ERR] {e}")
+                pass
             
         # Fallback para Groq se o provedor não tiver áudio (ex: OpenRouter)
         # Se falhar, tentamos o Groq padrao se a chave começar com 'gsk_'
@@ -345,9 +347,10 @@ class MegaAgent:
                 from langchain_groq import ChatGroq
                 self.llm = ChatGroq(api_key=api_key, model="llama-3.3-70b-versatile", temperature=0.2)
         except Exception as e:
-            print(f"[ERRO INIT LLM {m_type}]", e)
-            from langchain_groq import ChatGroq
-            self.llm = ChatGroq(api_key=api_key, model="llama-3.3-70b-versatile", temperature=0.2)
+            print(f"[CRITICAL ERR] Falha ao carregar Kernel {m_type}: {e}")
+            # Se falhar o Gemini/Together por falta de chave, o sistema não deve mentir dizendo que é outro
+            self.llm = None
+            raise e
             
         self.history = []
         try:
@@ -556,12 +559,20 @@ mega_agent_instance = None
 @app.post("/api/config")
 async def save_config(config: ConfigModel):
     global mega_agent_instance
-    current_config.update(config.dict())
-    mega_agent_instance = MegaAgent(current_config)
-    with open(CONFIG_FILE, "w") as f: json.dump(current_config, f)
-    msg = "Sincronizado."
-    audio = await gerar_audio_base64(msg)
-    return {"status": "success", "response": msg, "audio": audio}
+    print(f"[CONFIG] ATUALIZANDO CORE: {config.modelType.upper()}")
+    try:
+        current_config.update(config.dict())
+        mega_agent_instance = MegaAgent(current_config)
+        with open(CONFIG_FILE, "w") as f: json.dump(current_config, f)
+        # Bip de sucesso na troca
+        try: winsound.Beep(1000, 100); winsound.Beep(1500, 100)
+        except: pass
+        msg = f"Kernel {config.modelType} sincronizado."
+        audio = await gerar_audio_base64(msg)
+        return {"status": "success", "response": msg, "audio": audio}
+    except Exception as e:
+        print(f"[CONFIG ERR] {e}")
+        return {"status": "error", "message": str(e)}
 
 @app.get("/api/config")
 def get_config(): return current_config
