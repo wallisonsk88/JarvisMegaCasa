@@ -337,8 +337,28 @@ class MegaAgent:
         
         try:
             if m_type == "gemini":
-                from langchain_google_genai import ChatGoogleGenerativeAI
-                self.llm = ChatGoogleGenerativeAI(google_api_key=api_key, model="gemini-1.5-flash", temperature=0.2)
+                # Usa SDK nativo do Google para evitar conflito de dependencias do langchain-google-genai
+                import google.generativeai as genai
+                genai.configure(api_key=api_key)
+                # Wrapper compativel com interface .invoke() do LangChain
+                class GeminiWrapper:
+                    def __init__(self, key):
+                        import google.generativeai as genai
+                        genai.configure(api_key=key)
+                        self._model = genai.GenerativeModel("gemini-1.5-flash")
+                        self._key = key
+                    def invoke(self, prompt):
+                        if hasattr(prompt, 'content'):
+                            text = prompt.content
+                        elif isinstance(prompt, list):
+                            text = " ".join([m.content if hasattr(m, 'content') else str(m) for m in prompt])
+                        else:
+                            text = str(prompt)
+                        resp = self._model.generate_content(text)
+                        class FakeMsg:
+                            def __init__(self, t): self.content = t
+                        return FakeMsg(resp.text)
+                self.llm = GeminiWrapper(api_key)
             elif m_type == "openrouter":
                 from langchain_openai import ChatOpenAI
                 self.llm = ChatOpenAI(
