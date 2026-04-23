@@ -609,43 +609,43 @@ def voice_listener_loop(loop):
             time.sleep(0.5); continue
         
         try:
-            # Tenta abrir o stream. Se der erro, tenta procurar um dispositivo válido.
+            # Abre o stream uma única vez fora do sub-loop
             try:
                 stream = sd.InputStream(channels=1, samplerate=fs)
                 stream.start()
-            except Exception as audio_err:
-                print(f"[MOTOR] Erro no dispositivo padrão: {audio_err}. Procurando alternativas...")
-                devices = sd.query_devices()
-                input_device = None
-                for i, d in enumerate(devices):
-                    if d['max_input_channels'] > 0:
-                        try:
-                            stream = sd.InputStream(device=i, channels=1, samplerate=fs)
-                            stream.start()
-                            input_device = i
-                            print(f"[MOTOR] Usando dispositivo alternativo: {d['name']}")
-                            break
-                        except: continue
-                
-                if input_device is None:
-                    print("[MOTOR] Nenhum microfone funcional encontrado. Aguardando 10s...")
-                    time.sleep(10); continue
+            except Exception as e:
+                print(f"[MOTOR] Erro ao abrir microfone: {e}")
+                time.sleep(5); continue
 
-            with stream:
-                # ETAPA 1: Monitoramento Silencioso
-                data, _ = stream.read(int(2.0 * fs)) 
+            print("[SISTEMA] Motor de Despertar Online. Diga 'MEGA' para começar.")
+            
+            while True:
+                threshold = current_config.get("sensitivity", 0.002)
+                if is_processing:
+                    time.sleep(0.5); continue
+                
+                # ETAPA 1: Monitoramento Silencioso (Buffer de 2 segundos)
+                # Usamos read com block=False se possível, ou apenas lemos o chunk
+                data, _ = stream.read(int(1.5 * fs)) 
                 vol = np.linalg.norm(data) / np.sqrt(len(data))
                 
                 if vol > threshold:
+                    print(f"[DEBUG] Som detectado (Vol: {vol:.4f}) - Analisando...")
+                    
                     # Captura rápida...
                     fd, p1 = tempfile.mkstemp(suffix=".wav"); os.close(fd)
                     wavfile.write(p1, fs, data)
                     
                     text = get_transcription(p1, prompt="Mega").lower()
                     os.unlink(p1)
+                    
+                    if not text and current_config.get("modelType") == "openrouter":
+                        print("[AVISO] OpenRouter não possui serviço de voz. Use uma chave Groq ou Gemini para me ouvir.")
+                        time.sleep(2)
+                        continue
 
                     if text:
-                        if text: print(f"[ESCUTA] {text}")
+                        print(f"[ESCUTA] {text}")
                         wake_words = ["mega", "meiga", "meca", "nega", "amiga", "hey", "még", "vegas", "mika", "neca", "brega"]
                         
                         if any(w in text for w in wake_words):
@@ -659,33 +659,50 @@ def voice_listener_loop(loop):
                             ultima_fala = time.time()
                             
                             # Loop de Conversação Contínua
+                            ultima_interacao = time.time()
                             while True:
-                                # Escuta o comando por 8 segundos
-                                cmd_data, _ = stream.read(int(8.0 * fs))
-                                fd, p2 = tempfile.mkstemp(suffix=".wav"); os.close(fd)
-                                wavfile.write(p2, fs, cmd_data)
-                                
-                                # Stage 2: Continuous Command
-                                context_prompt = "Mega, Wallison, pesquisar, agendar, lembrete, YouTube, música, suporte, tocar."
-                                comando = get_transcription(p2, prompt=context_prompt)
-                                os.unlink(p2)
-                                
-                                # Se a pessoa não falou nada
-                                if len(comando) < 2:
+                                # Escuta o comando por 4 segundos (mais ágil que 8s)
+                                try:
+                                    # Verifica timeout de inatividade (2 minutos)
+                                    if time.time() - ultima_interacao > 120:
+                                        print("[SISTEMA] Inatividade detectada (2min). Hibernando...")
+                                        break
+
+                                    cmd_data, _ = stream.read(int(4.0 * fs))
+                                    vol_cmd = np.linalg.norm(cmd_data) / np.sqrt(len(cmd_data))
+                                    
+                                    # Se estiver muito silêncio, nem gasta API de transcrição
+                                    if vol_cmd < (threshold * 0.8):
+                                        time.sleep(0.1)
+                                        continue
+
+                                    fd, p2 = tempfile.mkstemp(suffix=".wav"); os.close(fd)
+                                    wavfile.write(p2, fs, cmd_data)
+                                    
+                                    comando = get_transcription(p2, prompt="Mega, comando, ação, pesquisar, sistema.").strip()
+                                    os.unlink(p2)
+                                except Exception as loop_err:
+                                    print(f"[LOOP ERR] {loop_err}")
                                     continue
                                     
+                                if len(comando) < 3:
+                                    continue
+                                    
+                                ultima_interacao = time.time()
+                                print(f"[USUÁRIO] {comando}")
+
                                 # Verifica comando manual de desativação
-                                cmd_clean = comando.lower().replace(",", "").replace(".", "").strip()
-                                desativar_keywords = ["mega desativar", "desativar mega", "desativar sistema", "dormir mega", "pode dormir", "vai dormir"]
+                                cmd_clean = comando.lower()
+                                desativar_keywords = ["desativar", "dormir", "ficar quieta", "pode ir", "encerrar", "desligar sistema", "tchau mega", "até logo", "descansar"]
                                 if any(kw in cmd_clean for kw in desativar_keywords):
-                                    print("[SISTEMA] Comando de desativação recebido. Voltando ao modo de descanso.")
-                                    asyncio.run_coroutine_threadsafe(event_queue.put({"type": "sleep_mode"}), loop)
-                                    try: winsound.Beep(600, 200); winsound.Beep(400, 200)
-                                    except: pass
+                                    print("[SISTEMA] Hibernando via comando.")
+                                    msg = "Entendido, senhor. Estou entrando em modo de espera. Basta me chamar pelo nome quando precisar."
+                                    mega_agent_instance.history.append(AIMessage(content=msg))
+                                    audio_b64 = asyncio.run_coroutine_threadsafe(gerar_audio_base64(msg), loop).result()
+                                    asyncio.run_coroutine_threadsafe(event_queue.put({"type": "voice_response", "text": msg, "audio": audio_b64}), loop)
                                     break
                                 
-                                ultima_fala = time.time()
-                                print(f"[USUÁRIO] {comando}")
+                                ultima_interacao = time.time()
                                 res_text = mega_agent_instance.process_command(comando)
                                 audio_b64 = asyncio.run_coroutine_threadsafe(gerar_audio_base64(res_text), loop).result()
                                 asyncio.run_coroutine_threadsafe(event_queue.put({"type": "voice_response", "text": res_text, "audio": audio_b64}), loop)
@@ -707,6 +724,10 @@ def voice_listener_loop(loop):
                                 # Avisa o frontend que está pronta e gravando de novo
                                 asyncio.run_coroutine_threadsafe(event_queue.put({"type": "wake_detected"}), loop)
                             
+                            # Ao sair do loop de conversação
+                            asyncio.run_coroutine_threadsafe(event_queue.put({"type": "sleep_mode"}), loop)
+                            try: winsound.Beep(600, 200); winsound.Beep(400, 200)
+                            except: pass
                             is_processing = False
         except Exception as e: 
             print(f"[ERR LISTENER] {e}")
