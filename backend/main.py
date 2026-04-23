@@ -357,12 +357,17 @@ class MegaAgent:
                     elif msg["type"] == "system": self.history.append(SystemMessage(content=msg["content"]))
         except Exception as e: print("[HISTORY LOAD ERROR]", e)
 
-    def verify_kernel(self):
+    async def verify_kernel(self):
         """Testa se o kernel consegue responder um 'ping' básico."""
         if not self.llm: return False
         try:
-            self.llm.invoke("Responda apenas 'OK'")
+            # Tenta um invoke rápido com timeout de 10s
+            import asyncio
+            await asyncio.wait_for(asyncio.to_thread(self.llm.invoke, "Responda apenas OK"), timeout=10.0)
             return True
+        except asyncio.TimeoutError:
+            print("[VERIFY ERR] Timeout na resposta da IA.")
+            raise Exception("A IA demorou muito para responder. Verifique sua internet ou a chave.")
         except Exception as e:
             print(f"[VERIFY ERR] {e}")
             return False
@@ -574,7 +579,8 @@ async def save_config(config: ConfigModel):
         
         # 3. Teste de Fogo (Verifica se a chave funciona)
         print(f"[CONFIG] TESTANDO CHAVE {config.modelType.upper()}...")
-        if not new_agent.verify_kernel():
+        verified = await new_agent.verify_kernel()
+        if not verified:
             raise Exception(f"A chave API para {config.modelType} parece inválida ou o serviço está offline.")
             
         # 4. Se passou, assume o novo agente
