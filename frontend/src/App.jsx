@@ -85,6 +85,8 @@ function App() {
           setSystemEmail(data.systemEmail || '');
           setSystemPassword(data.systemPassword || '');
           setSensitivity(data.sensitivity || 0.002);
+          setMessage(`KERNEL_${(data.modelType || 'groq').toUpperCase()}_SYNCED`);
+          setTimeout(() => setMessage(''), 3000);
         }
       })
       .catch(err => console.error("[ERRO CONFIG]", err));
@@ -164,15 +166,21 @@ function App() {
 
   const handleSave = async (newSens = null) => {
     const s = newSens || sensitivity;
+    setMessage('SYNCING_CORE...');
     try {
-      await fetch(`${API_BASE}/api/config`, {
+      const resp = await fetch(`${API_BASE}/api/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ modelType, apiKey, systemEmail, systemPassword, sensitivity: s })
       });
-      if (!newSens) setMessage('SISTEMA_ATUALIZADO.');
+      const data = await resp.json();
+      if (data.status === 'success') {
+        if (!newSens) setMessage(`SUCESSO: ${data.model.toUpperCase()} ATIVO`);
+      } else {
+        setMessage(`ERRO: ${data.message}`);
+      }
     } catch (err) { setMessage('FALHA_CONEXAO'); }
-    if (!newSens) setTimeout(() => setMessage(''), 3000);
+    if (!newSens) setTimeout(() => setMessage(''), 5000);
   };
 
   const handleSendMessage = async (e) => {
@@ -316,7 +324,12 @@ function App() {
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 backdrop-blur-3xl animate-in zoom-in-95 duration-200 p-8">
           <div className="bg-black/95 border-4 w-full max-w-md h-[90vh] p-8 relative flex flex-col" style={{ borderColor: activeColor }}>
             <button onClick={() => setActiveTab('chat')} className="absolute top-4 right-4 text-2xl font-light hover:rotate-90 transition-transform">X</button>
-            <h2 className="text-xl font-black mb-6 tracking-[0.4em] uppercase text-center mt-2">Core_Settings</h2>
+            <h2 className="text-xl font-black mb-1 tracking-[0.4em] uppercase text-center mt-2">Core_Settings</h2>
+            <div className="text-center mb-6">
+               <span className="px-2 py-1 bg-white/10 text-[8px] font-black tracking-widest text-white border border-white/20">
+                  KERNEL_STATUS: <span style={{ color: activeColor }}>{modelType.toUpperCase()}</span>
+               </span>
+            </div>
             
             <div className="flex-1 overflow-y-auto no-scrollbar space-y-6 text-[11px] font-black uppercase tracking-[0.2em] pr-2">
                
