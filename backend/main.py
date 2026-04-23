@@ -125,59 +125,51 @@ async def gerar_audio_base64(texto):
         return None
 
 def get_transcription(file_path, prompt="Mega"):
-    """Transcreve áudio usando o provedor configurado (Groq, Gemini ou Together)."""
-    m_type = current_config.get("modelType", "groq")
+    """Transcreve áudio detectando o provedor pela chave ou configuração."""
     api_key = current_config.get("apiKey", "")
+    m_type = current_config.get("modelType", "groq")
     
     if not api_key: return ""
 
     try:
-        if m_type == "groq":
+        # 1. Tenta adivinhar o motor de áudio pela chave (mais robusto)
+        is_groq = api_key.startswith("gsk_")
+        is_gemini = api_key.startswith("AIza")
+        is_together = api_key.startswith("top_")
+
+        # Prioridade 1: Groq (Whisper V3 Turbo - Mais rápido)
+        if is_groq or (m_type == "groq" and not is_gemini and not is_together):
             url = "https://api.groq.com/openai/v1/audio/transcriptions"
             headers = {"Authorization": f"Bearer {api_key}"}
             with open(file_path, "rb") as f:
-                files = {"file": f}
-                data = {"model": "whisper-large-v3-turbo", "language": "pt", "prompt": prompt}
-                resp = requests.post(url, headers=headers, files=files, data=data, timeout=10)
-                if resp.status_code == 200:
-                    return resp.json().get("text", "").strip()
+                resp = requests.post(url, headers=headers, files={"file": f}, 
+                                     data={"model": "whisper-large-v3-turbo", "language": "pt", "prompt": prompt}, timeout=10)
+                if resp.status_code == 200: return resp.json().get("text", "").strip()
         
-        elif m_type == "together":
+        # Prioridade 2: Together AI
+        elif is_together or (m_type == "together" and not is_gemini):
             url = "https://api.together.xyz/v1/audio/transcriptions"
             headers = {"Authorization": f"Bearer {api_key}"}
             with open(file_path, "rb") as f:
-                files = {"file": f}
-                data = {"model": "whisper-1", "language": "pt", "prompt": prompt}
-                resp = requests.post(url, headers=headers, files=files, data=data, timeout=10)
-                if resp.status_code == 200:
-                    return resp.json().get("text", "").strip()
-
-        elif m_type == "gemini":
-            try:
-                import google.generativeai as genai
-                genai.configure(api_key=api_key)
-                model = genai.GenerativeModel("gemini-2.0-flash")
-                with open(file_path, "rb") as f:
-                    audio_data = f.read()
-                response = model.generate_content([
-                    {"mime_type": "audio/wav", "data": audio_data},
-                    f"Transcreva este áudio em português. Retorne APENAS o texto transcrito. Contexto: {prompt}"
-                ])
-                return response.text.strip()
-            except Exception as e:
-                print(f"[GEMINI TRANSCRIPT ERR] {e}")
-                pass
-            
-        # Fallback para Groq se o provedor não tiver áudio (ex: OpenRouter)
-        # Se falhar, tentamos o Groq padrao se a chave começar com 'gsk_'
-        if api_key.startswith("gsk_"):
-            url = "https://api.groq.com/openai/v1/audio/transcriptions"
-            headers = {"Authorization": f"Bearer {api_key}"}
-            with open(file_path, "rb") as f:
-                resp = requests.post(url, headers=headers, files={"file": f}, data={"model": "whisper-large-v3-turbo", "language": "pt"}, timeout=5)
+                resp = requests.post(url, headers=headers, files={"file": f}, 
+                                     data={"model": "whisper-1", "language": "pt", "prompt": prompt}, timeout=10)
                 if resp.status_code == 200: return resp.json().get("text", "").strip()
+
+        # Prioridade 3: Gemini (Multimodal)
+        elif is_gemini or m_type == "gemini":
+            import google.generativeai as genai
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel("gemini-2.0-flash")
+            with open(file_path, "rb") as f:
+                audio_data = f.read()
+            response = model.generate_content([
+                {"mime_type": "audio/wav", "data": audio_data},
+                f"Transcreva este áudio em português. Retorne APENAS o texto. Contexto: {prompt}"
+            ])
+            return response.text.strip()
+            
     except Exception as e:
-        print(f"[TRANSCRIPT ERROR] {e}")
+        print(f"[TRANSCRIPT ERROR] Provedor {m_type} falhou: {e}")
         
     return ""
 
@@ -422,6 +414,7 @@ class MegaAgent:
                 return "Sr., demorei demais processando isso. Estou abortando para evitar falhas sistêmicas."
                 
             prompt = f"""[SYSTEM] Você é o MEGA Executive, um Sistema Autônomo e IA de nível kernel do Wallison Rangel.
+ESTADO ATUAL DO KERNEL: {self.config.get('modelType', 'UNKNOWN').upper()}
 Você agora tem capacidade de OpenInterpreter: pode ler e executar comandos livremente no computador dele via Poweshell ou executar Python abstrato.
 Caminho Oficial do Sistema do Usuário: {user_profile}  (ATENÇÃO: Este caminho contém espaços. SEMPRE use aspas no PowerShell, ex: mkdir "{user_profile}\\Desktop\\MegaA")
 Links salvos: {links_salvos} | Fatos Importantes: {memorias_gerais}.
@@ -464,6 +457,7 @@ Horário Atual: {datetime.now().strftime('%H:%M:%S')}"""
             messages = [SystemMessage(content=prompt)] + self.history
 
             try:
+                print(f"[MATRIZ] Processando via Kernel: {self.config.get('modelType', 'UNK').upper()} | LLM: {type(self.llm).__name__}")
                 resp = self.llm.invoke(messages)
                 self.history.append(resp) # Salva a própria saída para manter a coesão
                 self.save_history() # Salva no disco
