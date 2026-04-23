@@ -10,6 +10,7 @@ function App() {
   // Settings State (Full Restoration)
   const [modelType, setModelType] = useState('groq');
   const [apiKey, setApiKey] = useState('');
+  const [voiceApiKey, setVoiceApiKey] = useState('');
   const [systemEmail, setSystemEmail] = useState('');
   const [systemPassword, setSystemPassword] = useState('');
   const [message, setMessage] = useState('');
@@ -173,7 +174,7 @@ function App() {
       const resp = await fetch(`${API_BASE}/api/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ modelType, apiKey, systemEmail, systemPassword, sensitivity: s })
+        body: JSON.stringify({ modelType, apiKey, voiceApiKey, systemEmail, systemPassword, sensitivity: s })
       });
       const data = await resp.json();
       if (data.status === 'success') {
@@ -354,9 +355,18 @@ function App() {
                </div>
 
                <div className="space-y-2">
-                 <label className="text-[9px] opacity-40">Access Key (Token)</label>
-                 <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} className="w-full bg-black border-2 border-white/10 p-3 outline-none" placeholder="**********" />
-               </div>
+                  <label className="text-[9px] opacity-40">Access Key (Token)</label>
+                  <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} className="w-full bg-black border-2 border-white/10 p-3 outline-none" placeholder="**********" />
+                </div>
+
+               {/* Campo de Chave de Voz — aparece apenas para modelos sem voz */}
+               {(modelType === 'openrouter' || modelType === 'together') && (
+                 <div className="space-y-2">
+                   <label className="text-[9px] opacity-40">Chave Groq p/ Voz (obrigatório) <span className="text-yellow-400">⚡</span></label>
+                   <input type="password" value={voiceApiKey} onChange={e => setVoiceApiKey(e.target.value)} className="w-full bg-black border-2 border-yellow-500/40 p-3 outline-none" placeholder="gsk_... (chave Groq para transcrição)" />
+                   <p className="text-[8px] opacity-40">OpenRouter/Together não têm API de voz. Coloque uma chave Groq aqui para a MEGA ouvir você.</p>
+                 </div>
+               )}
 
                <div className="grid grid-cols-2 gap-4">
                  <div className="space-y-2">

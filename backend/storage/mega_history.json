@@ -1,0 +1,10 @@
+[
+  {
+    "type": "human",
+    "content": "mega"
+  },
+  {
+    "type": "ai",
+    "content": "{ \"skill\": \"none\", \"response\": \"Olá, sou o MEGA Executive. Como posso ajudar você hoje?\" }"
+  }
+]

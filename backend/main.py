@@ -96,6 +96,7 @@ event_queue = asyncio.Queue()
 class ConfigModel(BaseModel):
     modelType: str
     apiKey: str
+    voiceApiKey: str = ""  # Chave Groq separada para voz (quando usar OpenRouter/Together)
     systemEmail: str
     systemPassword: str
     sensitivity: float = 0.002
@@ -105,7 +106,8 @@ class ChatMessage(BaseModel):
 
 current_config = {
     "modelType": "groq", 
-    "apiKey": "", 
+    "apiKey": "",
+    "voiceApiKey": "",
     "systemEmail": "", 
     "systemPassword": "",
     "sensitivity": 0.002
@@ -127,57 +129,63 @@ async def gerar_audio_base64(texto):
         return None
 
 def get_transcription(file_path, prompt="Mega"):
-    """Transcreve áudio detectando o provedor pela chave ou configuração."""
+    """Transcreve áudio. Usa a melhor opção disponível."""
     api_key = current_config.get("apiKey", "")
+    voice_key = current_config.get("voiceApiKey", "").strip()  # Chave Groq dedicada para voz
     m_type = current_config.get("modelType", "groq")
     
     if not api_key: return ""
 
     try:
-        # 1. Detecta o motor real pela assinatura da chave
-        motor_real = m_type
-        if api_key.startswith("gsk_"): motor_real = "groq"
-        elif api_key.startswith("AIza"): motor_real = "gemini"
-        elif api_key.startswith("top_"): motor_real = "together"
-        elif api_key.startswith("sk-or"): motor_real = "openrouter"
+        # Detecta motor de voz: prefere chave dedicada, senão usa a principal
+        # Modelos que NÃO têm API de áudio: openrouter, together
+        modelos_sem_voz = ["openrouter", "together"]
+        
+        if voice_key and voice_key.startswith("gsk_"):
+            # Tem chave Groq dedicada para voz — usa sempre ela
+            motor_voz = "groq"
+            chave_voz = voice_key
+            print(f"[VOZ] Usando chave Groq dedicada para transcrição.")
+        elif m_type == "groq" and api_key.startswith("gsk_"):
+            motor_voz = "groq"
+            chave_voz = api_key
+        elif m_type == "gemini" or api_key.startswith("AIza"):
+            motor_voz = "gemini"
+            chave_voz = api_key
+        elif m_type in modelos_sem_voz:
+            print(f"[AVISO VOZ] {m_type.upper()} não tem API de voz. Configure uma 'Chave Groq p/ Voz' nas configurações.")
+            return ""
+        else:
+            motor_voz = "groq"
+            chave_voz = api_key
 
-        print(f"[VOZ] Transcrevendo via: {motor_real.upper()}")
+        print(f"[VOZ] Transcrevendo via: {motor_voz.upper()}")
 
-        # Groq (Whisper V3 Turbo)
-        if motor_real == "groq":
+        # Groq (Whisper V3 Turbo — mais rápido e preciso)
+        if motor_voz == "groq":
             url = "https://api.groq.com/openai/v1/audio/transcriptions"
-            headers = {"Authorization": f"Bearer {api_key}"}
+            headers = {"Authorization": f"Bearer {chave_voz}"}
             with open(file_path, "rb") as f:
                 resp = requests.post(url, headers=headers, files={"file": f}, 
                                      data={"model": "whisper-large-v3-turbo", "language": "pt", "prompt": prompt}, timeout=10)
                 if resp.status_code == 200: return resp.json().get("text", "").strip()
                 else: print(f"[GROQ ERR] {resp.text}")
-        
-        # Together AI
-        elif motor_real == "together":
-            url = "https://api.together.xyz/v1/audio/transcriptions"
-            headers = {"Authorization": f"Bearer {api_key}"}
-            with open(file_path, "rb") as f:
-                resp = requests.post(url, headers=headers, files={"file": f}, 
-                                     data={"model": "whisper-1", "language": "pt", "prompt": prompt}, timeout=10)
-                if resp.status_code == 200: return resp.json().get("text", "").strip()
-                else: print(f"[TOGETHER ERR] {resp.text}")
 
         # Gemini (Multimodal)
-        elif motor_real == "gemini":
+        elif motor_voz == "gemini":
             import google.generativeai as genai
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel("gemini-2.0-flash")
+            genai.configure(api_key=chave_voz)
+            model = genai.GenerativeModel("gemini-1.5-flash")
             with open(file_path, "rb") as f:
                 audio_data = f.read()
             response = model.generate_content([
                 {"mime_type": "audio/wav", "data": audio_data},
-                f"Transcreva este áudio em português. Retorne APENAS o texto. Contexto: {prompt}"
+                f"Transcreva este áudio em português. Retorne APENAS o texto transcrito, sem explicações. Contexto: {prompt}"
             ])
             return response.text.strip()
             
     except Exception as e:
-        print(f"[TRANSCRIPT ERROR] Provedor {m_type} falhou: {e}")
+        print(f"[TRANSCRIPT ERROR] {e}")
         
     return ""
 
